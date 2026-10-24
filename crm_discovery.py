@@ -96,5 +96,21 @@ def build_crm_discovery_routes(
                 methods=["GET", "OPTIONS"],
             )
         )
+        routes.append(
+            Route(
+                f"/.well-known/openid-configuration{mcp_path}",
+                endpoint=as_endpoint,
+                methods=["GET", "OPTIONS"],
+            )
+        )
+
+    if issuer_path:
+        routes.append(
+            Route(
+                f"/.well-known/openid-configuration{issuer_path}",
+                endpoint=as_endpoint,
+                methods=["GET", "OPTIONS"],
+            )
+        )
 
     return routes

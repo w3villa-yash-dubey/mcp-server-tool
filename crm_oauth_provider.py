@@ -100,9 +100,11 @@ class CRMOAuthProvider(OAuthProvider):
         super().set_mcp_path(mcp_path)
         assert self.issuer_url is not None
         assert self._resource_url is not None
+        issuer = str(self.issuer_url).rstrip("/")
+        audience = str(self._resource_url).rstrip("/")
         self._jwt_issuer = JWTIssuer(
-            issuer=str(self.issuer_url),
-            audience=str(self._resource_url),
+            issuer=issuer,
+            audience=audience,
             signing_key=self._jwt_signing_key,
         )
 

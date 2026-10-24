@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.routing import BaseRoute, Mount, Route
 
+from combined_auth import PathAwareAuthBackend
 from config import Settings
 from crm_discovery import build_crm_discovery_routes
 from crm_mcp import build_crm_mcp
@@ -67,9 +71,21 @@ def create_app(settings: Settings, storage: CRMStorage) -> Starlette:
     routes.append(Mount(oauth_mount, app=crm_oauth_app))
     routes.extend(weather_app.routes)
 
+    shared_middleware = [
+        Middleware(
+            AuthenticationMiddleware,
+            backend=PathAwareAuthBackend(
+                weather_auth=weather_mcp.auth,
+                crm_auth=crm_auth,
+                crm_mcp_path=settings.crm_mcp_path,
+            ),
+        ),
+        Middleware(AuthContextMiddleware),
+    ]
+
     app = Starlette(
         routes=routes,
-        middleware=weather_app.user_middleware,
+        middleware=shared_middleware,
         lifespan=combine_lifespans(weather_app.lifespan, crm_app.lifespan),
     )
     return app

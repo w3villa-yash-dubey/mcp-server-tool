@@ -21,6 +21,80 @@ def _pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
+@respx.mock
+def test_oauth_access_token_works_on_crm_mcp(app, storage, oauth_client_info, test_settings):
+    """Token from /crm-auth/token must authenticate POST /crm/mcp."""
+    storage.save_client(oauth_client_info)
+    respx.get(re.compile(r"/api/v1/accounts/.+/contacts/search")).mock(
+        return_value=httpx.Response(200, json={"payload": []})
+    )
+    verifier, challenge = _pkce_pair()
+    resource = test_settings.public_base_url.rstrip("/") + test_settings.crm_mcp_path
+
+    with TestClient(app) as client:
+        auth = client.get(
+            "/crm-auth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": oauth_client_info.client_id,
+                "redirect_uri": "https://chatgpt.com/connector/oauth/callback",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "scope": "crm:contacts:read",
+                "resource": resource,
+            },
+            follow_redirects=False,
+        )
+        login_url = auth.headers["location"]
+        client.get(login_url)
+        txn_id = parse_qs(urlparse(login_url).query)["txn_id"][0]
+        post = client.post(
+            "/crm-auth/login",
+            data={"txn_id": txn_id, "company_id": "42", "crm_api_token": "tok"},
+            follow_redirects=False,
+        )
+        code = parse_qs(urlparse(post.headers["location"]).query)["code"][0]
+        token_response = client.post(
+            "/crm-auth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "https://chatgpt.com/connector/oauth/callback",
+                "client_id": oauth_client_info.client_id,
+                "code_verifier": verifier,
+                "resource": resource,
+            },
+        )
+        assert token_response.status_code == 200
+        access = token_response.json()["access_token"]
+
+        ok = client.post(
+            "/crm/mcp",
+            headers={"Authorization": f"Bearer {access}"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        assert ok.status_code != 401, ok.text
+        assert "invalid_token" not in (ok.headers.get("www-authenticate") or "").lower()
+
+        bad = client.post(
+            "/crm/mcp",
+            headers={"Authorization": "Bearer not-a-real-token"},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+        assert bad.status_code == 401
+
+
+def test_crm_openid_configuration_alias(app):
+    with TestClient(app) as client:
+        for path in (
+            "/.well-known/openid-configuration/crm-auth",
+            "/.well-known/openid-configuration/crm/mcp",
+        ):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.json()["token_endpoint"].endswith("/crm-auth/token")
+
+
 def test_weather_mcp_still_requires_auth(app):
     with TestClient(app) as client:
         response = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
