@@ -26,8 +26,31 @@ class ValidationResult:
     message: str
 
 
+def _account_url(base_url: str, company_id: str, path: str) -> str:
+    return f"{base_url}/api/v1/accounts/{company_id}/{path}"
+
+
 def _contacts_search_url(base_url: str, company_id: str) -> str:
-    return f"{base_url}/api/v1/accounts/{company_id}/contacts/search"
+    return _account_url(base_url, company_id, "contacts/search")
+
+
+def _contacts_filter_url(base_url: str, company_id: str) -> str:
+    return _account_url(base_url, company_id, "contacts/filter")
+
+
+def _boards_url(base_url: str, company_id: str) -> str:
+    return _account_url(base_url, company_id, "boards")
+
+
+def _agents_url(base_url: str, company_id: str) -> str:
+    return _account_url(base_url, company_id, "agents")
+
+
+def _auth_headers(api_token: str) -> dict[str, str]:
+    return {
+        "api_access_token": api_token,
+        "Content-Type": "application/json",
+    }
 
 
 async def validate_crm_credentials(
@@ -106,10 +129,6 @@ async def search_contacts(
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     url = _contacts_search_url(base_url, company_id)
-    headers = {
-        "api_access_token": api_token,
-        "Content-Type": "application/json",
-    }
     params = {
         "include_contact_inboxes": "false",
         "page": str(page),
@@ -120,7 +139,7 @@ async def search_contacts(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
     try:
-        response = await http.get(url, headers=headers, params=params)
+        response = await http.get(url, headers=_auth_headers(api_token), params=params)
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict):
@@ -129,3 +148,111 @@ async def search_contacts(
     finally:
         if owns_client:
             await http.aclose()
+
+
+async def filter_contacts(
+    *,
+    base_url: str,
+    company_id: str,
+    api_token: str,
+    filters: list[dict[str, Any]],
+    page: int = 1,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """POST contacts filter. actions is always empty (read-only)."""
+    url = _contacts_filter_url(base_url, company_id)
+    params = {
+        "include_contact_inboxes": "false",
+        "page": str(page),
+        "sort": "-created_at",
+    }
+    body = {
+        "filters": {"payload": filters},
+        "actions": [],
+        "is_actions": False,
+    }
+
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+    try:
+        response = await http.post(
+            url, headers=_auth_headers(api_token), params=params, json=body
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            return {"results": data}
+        return data
+    finally:
+        if owns_client:
+            await http.aclose()
+
+
+async def list_boards(
+    *,
+    base_url: str,
+    company_id: str,
+    api_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """List boards and their pipeline statuses (slim)."""
+    url = _boards_url(base_url, company_id)
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+    try:
+        response = await http.get(url, headers=_auth_headers(api_token))
+        response.raise_for_status()
+        data = response.json()
+    finally:
+        if owns_client:
+            await http.aclose()
+
+    raw = data.get("boards_data", []) if isinstance(data, dict) else []
+    boards = []
+    for board in raw:
+        if not isinstance(board, dict):
+            continue
+        statuses = [
+            {"id": s.get("id"), "name": s.get("name")}
+            for s in board.get("statuses_attributes") or []
+            if isinstance(s, dict)
+        ]
+        boards.append(
+            {"id": board.get("id"), "name": board.get("name"), "statuses": statuses}
+        )
+    return {"boards": boards, "total": len(boards)}
+
+
+async def list_assignees(
+    *,
+    base_url: str,
+    company_id: str,
+    api_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """List agents/assignees (slim; no tokens)."""
+    url = _agents_url(base_url, company_id)
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+    try:
+        response = await http.get(url, headers=_auth_headers(api_token))
+        response.raise_for_status()
+        data = response.json()
+    finally:
+        if owns_client:
+            await http.aclose()
+
+    raw = data if isinstance(data, list) else []
+    assignees = []
+    for agent in raw:
+        if not isinstance(agent, dict):
+            continue
+        assignees.append(
+            {
+                "id": agent.get("id"),
+                "name": agent.get("name") or agent.get("available_name"),
+                "email": agent.get("email"),
+                "role": agent.get("role"),
+            }
+        )
+    return {"assignees": assignees, "total": len(assignees)}
